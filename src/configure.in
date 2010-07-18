@@ -1256,7 +1256,7 @@ test "x$with_x" = xno -a "x$MACOSX" != "xyes" -a "x$QNX" != "xyes" && enable_gui
 
 AC_MSG_CHECKING(--enable-gui argument)
 AC_ARG_ENABLE(gui,
- [  --enable-gui[=OPTS]     X11 GUI [default=auto] [OPTS=auto/no/gtk/gtk2/gnome/gnome2/motif/athena/neXtaw/photon/carbon]], , enable_gui="auto")
+ [  --enable-gui[=OPTS]     X11 GUI [default=auto] [OPTS=auto/no/gtk/gtk2/clutter/gnome/gnome2/motif/athena/neXtaw/photon/carbon]], , enable_gui="auto")
 
 dnl Canonicalize the --enable-gui= argument so that it can be easily compared.
 dnl Do not use character classes for portability with old tools.
@@ -1376,7 +1376,7 @@ fi
 if test "x$SKIP_CLUTTER" != "xYES" -a "$enable_gui_canon" != "clutter"; then
   AC_MSG_CHECKING(whether or not to look for Clutter)
   AC_ARG_ENABLE(clutter-check,
-	[  --enable-clutter-check    If auto-selec GUI, check for Clutter [default=yes]],
+	[  --enable-clutter-check    If auto-select GUI, check for Clutter [default=yes]],
 	, enable_clutter_check="yes")
   AC_MSG_RESULT($enable_clutter_check)
   if test "x$enable_clutter_check" = "xno"; then
