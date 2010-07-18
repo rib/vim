@@ -20,6 +20,12 @@
 # include "gui_beval.h"
 #endif
 
+#ifdef FEAT_GUI_CLUTTER
+# include <X11/Intrinsic.h>
+# include <clutter/clutter.h>
+# include <cogl/cogl-pango.h>
+#endif
+
 #ifdef FEAT_GUI_GTK
 # ifdef VMS /* undef MIN and MAX because Intrinsic.h redefines them anyway */
 #  ifdef MAX
@@ -151,7 +157,7 @@
 #define DRAW_BOLD		0x02	/* draw bold text */
 #define DRAW_UNDERL		0x04	/* draw underline text */
 #define DRAW_UNDERC		0x08	/* draw undercurl text */
-#if defined(RISCOS) || defined(HAVE_GTK2)
+#if defined(RISCOS) || defined(HAVE_GTK2) || defined(FEAT_GUI_CLUTTER)
 # define DRAW_ITALIC		0x10	/* draw italic text */
 #endif
 #define DRAW_CURSOR		0x20	/* drawing block cursor (win32) */
@@ -234,33 +240,40 @@ typedef long	    guicolor_T;	/* handle for a GUI color; for X11 this should
 				   displays there is a tiny chance this is an
 				   actual color */
 
-#ifdef FEAT_GUI_GTK
-# ifdef HAVE_GTK2
+#ifdef FEAT_GUI_CLUTTER
+  typedef PangoFontDescription	*GuiFont;	/* handle for a GUI font */
+  typedef PangoFontDescription  *GuiFontset;    /* handle for a GUI fontset */
+# define NOFONT			(GuiFont)NULL
+# define NOFONTSET		(GuiFontset)NULL
+#else
+# ifdef FEAT_GUI_GTK
+#  ifdef HAVE_GTK2
   typedef PangoFontDescription	*GuiFont;       /* handle for a GUI font */
   typedef PangoFontDescription  *GuiFontset;    /* handle for a GUI fontset */
-# else
+#  else
   typedef GdkFont	*GuiFont;	/* handle for a GUI font */
   typedef GdkFont	*GuiFontset;	/* handle for a GUI fontset */
-# endif
-# define NOFONT		(GuiFont)NULL
-# define NOFONTSET	(GuiFontset)NULL
-#else
-# ifdef FEAT_GUI_PHOTON
-  typedef char		*GuiFont;
-  typedef char		*GuiFontset;
+#  endif
 #  define NOFONT	(GuiFont)NULL
 #  define NOFONTSET	(GuiFontset)NULL
 # else
-#  ifdef FEAT_GUI_X11
+#  ifdef FEAT_GUI_PHOTON
+  typedef char		*GuiFont;
+  typedef char		*GuiFontset;
+#   define NOFONT	(GuiFont)NULL
+#   define NOFONTSET	(GuiFontset)NULL
+#  else
+#   ifdef FEAT_GUI_X11
   typedef XFontStruct	*GuiFont;	/* handle for a GUI font */
   typedef XFontSet	GuiFontset;	/* handle for a GUI fontset */
-#   define NOFONT	(GuiFont)0
-#   define NOFONTSET	(GuiFontset)0
-#  else
+#    define NOFONT	(GuiFont)0
+#    define NOFONTSET	(GuiFontset)0
+#   else
   typedef long_u	GuiFont;	/* handle for a GUI font */
   typedef long_u	GuiFontset;	/* handle for a GUI fontset */
-#   define NOFONT	(GuiFont)0
-#   define NOFONTSET	(GuiFontset)0
+#    define NOFONT	(GuiFont)0
+#    define NOFONTSET	(GuiFontset)0
+#   endif
 #  endif
 # endif
 #endif
@@ -377,6 +390,17 @@ typedef struct Gui
 
     char_u	*geom;		    /* Geometry, eg "80x24" */
     Bool	color_approx;	    /* Some color was approximated */
+#endif
+
+#ifdef FEAT_GUI_CLUTTER
+    ClutterActor *stage;	    /* top level Clutter window */
+    CoglPangoFontMap *font_map;
+    PangoContext     *text_context; /* the context used for all text */
+    PangoFont	     *ascii_font;   /* cached font for ASCII strings */
+    PangoGlyphString *ascii_glyphs; /* cached code point -> glyph map */
+
+    CoglColor	fgcolor;	    /* foreground color */
+    CoglColor	bgcolor;	    /* background color */
 #endif
 
 #ifdef FEAT_GUI_GTK

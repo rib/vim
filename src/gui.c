@@ -1126,7 +1126,7 @@ gui_update_cursor(force, clear_selection)
     void
 gui_position_menu()
 {
-# if !defined(FEAT_GUI_GTK) && !defined(FEAT_GUI_MOTIF)
+# if !defined(FEAT_GUI_GTK) && !defined(FEAT_GUI_MOTIF) && !defined(FEAT_GUI_CLUTTER)
     if (gui.menu_is_active && gui.in_use)
 	gui_mch_set_menu_pos(0, 0, gui.menu_width, gui.menu_height);
 # endif
@@ -1917,7 +1917,7 @@ gui_screenchar(off, flags, fg, bg, back)
 #endif
 }
 
-#ifdef HAVE_GTK2
+#if defined(HAVE_GTK2) || defined(FEAT_GUI_CLUTTER)
 /*
  * Output the string at the given screen position.  This is used in place
  * of gui_screenchar() where possible because Pango needs as much context
@@ -2187,7 +2187,7 @@ gui_outstr_nowrap(s, len, flags, fg, bg, back)
     if (back != 0 && ((draw_flags & DRAW_BOLD) || (highlight_mask & HL_ITALIC)))
 	return FAIL;
 
-#if defined(RISCOS) || defined(HAVE_GTK2)
+#if defined(RISCOS) || defined(HAVE_GTK2) || defined(FEAT_GUI_CLUTTER)
     /* If there's no italic font, then fake it.
      * For GTK2, we don't need a different font for italic style. */
     if (hl_mask_todo & HL_ITALIC)
@@ -2219,6 +2219,8 @@ gui_outstr_nowrap(s, len, flags, fg, bg, back)
 #ifdef HAVE_GTK2
     /* The value returned is the length in display cells */
     len = gui_gtk2_draw_string(gui.row, col, s, len, draw_flags);
+#elif defined(FEAT_GUI_CLUTTER)
+    len = gui_clutter_draw_string(gui.row, col, s, len, draw_flags);
 #else
 # ifdef FEAT_MBYTE
     if (enc_utf8)
@@ -2497,7 +2499,7 @@ gui_redraw_block(row1, col1, row2, col2, flags)
 	{
 	    if (ScreenLines[off + col1] == 0)
 		--col1;
-# ifdef HAVE_GTK2
+# if defined(HAVE_GTK2) || defined(FEAT_GUI_CLUTTER)
 	    if (col2 + 1 < Columns && ScreenLines[off + col2 + 1] == 0)
 		++col2;
 # endif
@@ -2522,7 +2524,7 @@ gui_redraw_block(row1, col1, row2, col2, flags)
 	{
 	    first_attr = ScreenAttrs[off];
 	    gui.highlight_mask = first_attr;
-#if defined(FEAT_MBYTE) && !defined(HAVE_GTK2)
+#if defined(FEAT_MBYTE) && !defined(HAVE_GTK2) && !defined(FEAT_GUI_CLUTTER)
 	    if (enc_utf8 && ScreenLinesUC[off] != 0)
 	    {
 		/* output multi-byte character separately */
@@ -2543,7 +2545,7 @@ gui_redraw_block(row1, col1, row2, col2, flags)
 	    else
 #endif
 	    {
-#ifdef HAVE_GTK2
+#if defined(HAVE_GTK2) || defined(FEAT_GUI_CLUTTER)
 		for (idx = 0; idx < len; ++idx)
 		{
 		    if (enc_utf8 && ScreenLines[off + idx] == 0)

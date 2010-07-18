@@ -2794,7 +2794,7 @@ theend:
     convert_setup(&vimconv, NULL, NULL);
 }
 
-#if defined(HAVE_GTK2) || defined(PROTO)
+#if defined(HAVE_GTK2) || defined(PROTO) || defined(FEAT_GUI_CLUTTER)
 /*
  * Return TRUE if string "s" is a valid utf-8 string.
  * When "end" is NULL stop at the first NUL.

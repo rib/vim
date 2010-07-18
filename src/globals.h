@@ -1391,8 +1391,8 @@ EXTERN char_u e_failed[]	INIT(= N_("E472: Command failed"));
 #if defined(FEAT_GUI) && defined(FEAT_XFONTSET)
 EXTERN char_u e_fontset[]	INIT(= N_("E234: Unknown fontset: %s"));
 #endif
-#if defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK) || defined(MACOS) \
-	|| defined(FEAT_GUI_PHOTON) || defined(FEAT_GUI_MSWIN)
+#if defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK) || defined(FEAT_GUI_CLUTTER) \
+	|| defined(MACOS) || defined(FEAT_GUI_PHOTON) || defined(FEAT_GUI_MSWIN)
 EXTERN char_u e_font[]		INIT(= N_("E235: Unknown font: %s"));
 #endif
 #if (defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK)) && !defined(HAVE_GTK2)
@@ -1472,6 +1472,9 @@ EXTERN char_u e_openerrf[]	INIT(= N_("E40: Can't open errorfile %s"));
 #endif
 #if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_X11)
 EXTERN char_u e_opendisp[]	INIT(= N_("E233: cannot open display"));
+#endif
+#if defined(FEAT_GUI_CLUTTER)
+EXTERN char_u e_clutter_init[]	INIT(= N_("E233: could not initialize Clutter"));
 #endif
 EXTERN char_u e_outofmem[]	INIT(= N_("E41: Out of memory!"));
 #ifdef FEAT_INS_EXPAND

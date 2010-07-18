@@ -90,6 +90,7 @@
 #endif
 
 #if defined(FEAT_GUI_MOTIF) \
+    || defined(FEAT_GUI_CLUTTER) \
     || defined(FEAT_GUI_GTK) \
     || defined(FEAT_GUI_ATHENA) \
     || defined(FEAT_GUI_MAC) \
@@ -1978,7 +1979,7 @@ typedef int VimClipboard;	/* This is required for the prototypes. */
 #endif
 
 #if defined(FEAT_GUI) && defined(FEAT_XCLIPBOARD)
-# ifdef FEAT_GUI_GTK
+# if defined(FEAT_GUI_GTK) || defined(FEAT_GUI_CLUTTER)
    /* Avoid using a global variable for the X display.  It's ugly
     * and is likely to cause trouble in multihead environments. */
 #  define X_DISPLAY	((gui.in_use) ? gui_mch_get_display() : xterm_dpy)

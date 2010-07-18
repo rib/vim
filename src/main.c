@@ -27,6 +27,9 @@
 # include <limits.h>
 #endif
 
+/* FIXME: guard me! */
+#include <glib.h>
+
 /* Maximum number of commands from + or -c arguments. */
 #define MAX_ARG_CMDS 10
 
@@ -355,7 +358,7 @@ main
 #ifdef ALWAYS_USE_GUI
     gui.starting = TRUE;
 #else
-# if defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK)
+# if defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK) || defined(FEAT_GUI_CLUTTER)
     /*
      * Check if the GUI can be started.  Reset gui.starting if not.
      * Don't know about other systems, stay on the safe side and don't check.
@@ -629,6 +632,7 @@ main
 	    putchar('\n');
 #endif
 
+    fprintf (stderr, "\n\nXXX main.c %d %d\n\n", gui.starting, gui.in_use);
 	gui_start();		/* will set full_screen to TRUE */
 	TIME_MSG("starting GUI");
 
@@ -948,6 +952,29 @@ main
 }
 #endif /* PROTO */
 
+    static gboolean
+vim_main_loop_prepare (GSource *source,
+		       int *timeout_)
+{
+    *timeout_ = -1;
+    return FALSE;
+}
+
+    static gboolean
+vim_main_loop_check (GSource *source)
+{
+    return FALSE;
+}
+
+
+    static gboolean
+vim_main_loop_dispatch (GSource *source,
+			GSourceFunc callback,
+			void *user_data)
+{
+    return FALSE;
+}
+
 /*
  * Main loop: Execute Normal mode commands until exiting Vim.
  * Also used to handle commands in the command-line window, until the window
@@ -962,6 +989,7 @@ main_loop(cmdwin, noexmode)
 {
     oparg_T	oa;				/* operator arguments */
     int		previous_got_int = FALSE;	/* "got_int" was TRUE */
+    GMainLoop  *main_loop;
 
 #if defined(FEAT_X11) && defined(FEAT_XCLIPBOARD)
     /* Setup to catch a terminating error from the X server.  Just ignore
@@ -994,6 +1022,23 @@ main_loop(cmdwin, noexmode)
 	redraw_later_clear();
     }
 #endif
+
+    if (!cmdwin && !noexmode)
+    {
+	static GSourceFuncs source_funcs =
+	{
+	    vim_main_loop_prepare,
+	    vim_main_loop_check,
+	    vim_main_loop_dispatch,
+	    NULL
+	};
+	GSource *source;
+
+	source = g_source_new (&source_funcs, sizeof (GSource));
+	g_source_attach (source, NULL);
+
+	clutter_main ();
+    }
 
     clear_oparg(&oa);
     while (!cmdwin

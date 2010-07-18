@@ -1707,7 +1707,7 @@ AC_DEFUN(AM_PATH_CLUTTER_1_0,
 [
   if test "X$PKG_CONFIG" != "Xno"; then
   {
-    min_clutter_version=ifelse([$1], ,1.2,$1)
+    min_clutter_version=ifelse([$1], ,1.4,$1)
     AC_MSG_CHECKING(for Clutter - version >= $min_clutter_version)
     no_clutter=""
     if (test "X$SKIP_CLUTTER2" != "XYES" -a "X$PKG_CONFIG" != "Xno") \
@@ -1719,6 +1719,7 @@ AC_DEFUN(AM_PATH_CLUTTER_1_0,
       CLUTTER_CFLAGS=`$PKG_CONFIG --cflags clutter-1.0`
       CLUTTER_LIBDIR=`$PKG_CONFIG --libs-only-L clutter-1.0`
       CLUTTER_LIBS=`$PKG_CONFIG --libs clutter-1.0`
+      echo "CLUTTER_LIBS=$CLUTTER_LIBS"
       clutter_major_version=`$PKG_CONFIG --modversion clutter-1.0 | \
 	     sed 's/\([[0-9]]*\)\.\([[0-9]]*\)\.\([[0-9]]*\)/\1/'`
       clutter_minor_version=`$PKG_CONFIG --modversion clutter-1.0 | \
@@ -1778,6 +1779,7 @@ if test -z "$SKIP_CLUTTER"; then
 	SKIP_NEXTAW=YES
 	SKIP_MOTIF=YES
 	GUITYPE=CLUTTER
+	echo "CLUTTER_LIBNAME=$CLUTTER_LIBNAME"
 	AC_SUBST(CLUTTER_LIBNAME)
       fi
     fi

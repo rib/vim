@@ -1128,7 +1128,7 @@ NONE_INSTALL = install_normal
 
 ### Clutter GUI
 CLUTTER_SRC	= gui.c gui_clutter.c pty.c
-CLUTTER_OBJ	= objects/gui.o objects/pty.o
+CLUTTER_OBJ	= objects/gui.o objects/gui_clutter.o objects/pty.o
 CLUTTER_DEFS	= -DFEAT_GUI_CLUTTER $(NARROW_PROTO)
 CLUTTER_IPATH	= $(GUI_INC_LOC)
 CLUTTER_LIBS_DIR = $(GUI_LIB_LOC)
@@ -1267,7 +1267,7 @@ CARBONGUI_TESTARG = VIMPROG=../$(APPDIR)/Contents/MacOS/$(VIMTARGET)
 
 # All GUI files
 ALL_GUI_SRC  = gui.c gui_clutter.c gui_gtk.c gui_gtk_f.c gui_motif.c gui_xmdlg.c gui_xmebw.c gui_athena.c gui_gtk_x11.c gui_x11.c gui_at_sb.c gui_at_fs.c pty.c
-ALL_GUI_PRO  = gui.pro gui_gtk.pro gui_motif.pro gui_xmdlg.pro gui_athena.pro gui_gtk_x11.pro gui_x11.pro gui_w16.pro gui_w32.pro gui_photon.pro
+ALL_GUI_PRO  = gui.pro gui_clutter.pro gui_gtk.pro gui_motif.pro gui_xmdlg.pro gui_athena.pro gui_gtk_x11.pro gui_x11.pro gui_w16.pro gui_w32.pro gui_photon.pro
 
 # }}}
 
@@ -2411,6 +2411,9 @@ objects/gui_athena.o: gui_athena.c
 
 objects/gui_beval.o: gui_beval.c
 	$(CCC) -o $@ gui_beval.c
+
+objects/gui_clutter.o: gui_clutter.c
+	$(CCC) -o $@ gui_clutter.c
 
 objects/gui_gtk.o: gui_gtk.c
 	$(CCC) -o $@ gui_gtk.c
