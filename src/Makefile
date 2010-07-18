@@ -1126,6 +1126,20 @@ LINKIT = @echo >/dev/null
 # Without a GUI install the normal way.
 NONE_INSTALL = install_normal
 
+### Clutter GUI
+CLUTTER_SRC	= gui.c gui_clutter.c pty.c
+CLUTTER_OBJ	= objects/gui.o objects/pty.o
+CLUTTER_DEFS	= -DFEAT_GUI_CLUTTER $(NARROW_PROTO)
+CLUTTER_IPATH	= $(GUI_INC_LOC)
+CLUTTER_LIBS_DIR = $(GUI_LIB_LOC)
+CLUTTER_LIBS1	=
+CLUTTER_LIBS2	= $(CLUTTER_LIBNAME)
+CLUTTER_INSTALL = install_normal install_gui_extra
+CLUTTER_TARGETS	= installglinks
+CLUTTER_MAN_TARGETS = yes
+CLUTTER_TESTTARGET  = gui
+CLUTTER_BUNDLE	=
+
 ### GTK GUI
 GTK_SRC		= gui.c gui_gtk.c gui_gtk_x11.c pty.c gui_gtk_f.c \
 			gui_beval.c
@@ -1252,7 +1266,7 @@ APPDIR = $(VIMNAME).app
 CARBONGUI_TESTARG = VIMPROG=../$(APPDIR)/Contents/MacOS/$(VIMTARGET)
 
 # All GUI files
-ALL_GUI_SRC  = gui.c gui_gtk.c gui_gtk_f.c gui_motif.c gui_xmdlg.c gui_xmebw.c gui_athena.c gui_gtk_x11.c gui_x11.c gui_at_sb.c gui_at_fs.c pty.c
+ALL_GUI_SRC  = gui.c gui_clutter.c gui_gtk.c gui_gtk_f.c gui_motif.c gui_xmdlg.c gui_xmebw.c gui_athena.c gui_gtk_x11.c gui_x11.c gui_at_sb.c gui_at_fs.c pty.c
 ALL_GUI_PRO  = gui.pro gui_gtk.pro gui_motif.pro gui_xmdlg.pro gui_athena.pro gui_gtk_x11.pro gui_x11.pro gui_w16.pro gui_w32.pro gui_photon.pro
 
 # }}}
@@ -1714,7 +1728,7 @@ os_vms.pro: os_vms.c
 # must use os_vms_conf.h for auto/config.h
 	mv auto/config.h auto/config.h.save
 	cp os_vms_conf.h auto/config.h
-	cproto $(PFLAGS) -DVMS -UFEAT_GUI_ATHENA -UFEAT_GUI_NEXTAW -UFEAT_GUI_MOTIF -UFEAT_GUI_GTK $< > proto/$@
+	cproto $(PFLAGS) -DVMS -UFEAT_GUI_ATHENA -UFEAT_GUI_NEXTAW -UFEAT_GUI_MOTIF -UFEAT_GUI_GTK -UFEAT_GUI_CLUTTER $< > proto/$@
 	echo "/* vim: set ft=c : */" >> proto/$@
 	rm auto/config.h
 	mv auto/config.h.save auto/config.h
