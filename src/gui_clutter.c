@@ -95,7 +95,7 @@ gui_mch_beep (void)
     void
 gui_mch_clear_all (void)
 {
-    cogl_clear (&gui.bgcolor, COGL_BUFFER_BIT_COLOR);
+//    cogl_clear (&gui.bgcolor, COGL_BUFFER_BIT_COLOR);
 }
 
     void
@@ -227,16 +227,13 @@ gui_clutter_draw_string (int row, int col, char_u *s, int len, int flags)
 
 	x = TEXT_X(col) * PANGO_SCALE;
 	y = TEXT_Y(row) * PANGO_SCALE;
-	//x = TEXT_X(col);
-	//y = TEXT_Y(row);
 	renderer = cogl_pango_font_map_get_renderer (gui.font_map);
 	
-	cogl_color_init_from_4f (&color, 1, 0, 0, 1);
-	cogl_pango_renderer_draw_glyphs (renderer,
-					 item->analysis.font,
-					 &gui.fgcolor,
-					 glyphs,
-					 x, y);
+	cogl_set_source_color (&gui.fgcolor);
+	pango_renderer_draw_glyphs (renderer,
+				    item->analysis.font,
+				    glyphs,
+				    x, y);
 
 	pango_item_free(item);
 
@@ -442,6 +439,17 @@ gui_mch_getmouse (int *x, int *y)
     fprintf (stderr, "gui_mch_getmouse FIXME\n");
 }
 
+/*
+ * Use the blank mouse pointer or not.
+ *
+ * hide: TRUE = use blank ptr, FALSE = use parent ptr
+ */
+    void
+gui_mch_mousehide(int hide)
+{
+    fprintf (stderr, "gui_mch_mousehide FIXME\n");
+}
+
     long_u
 gui_mch_get_rgb (guicolor_T pixel)
 {
@@ -478,7 +486,36 @@ gui_mch_iconify (void)
 paint_cb (ClutterActor *actor,
 	  void *user_data)
 {
-    update_screen (0);
+    /*
+     * Before redrawing, make sure w_topline is correct, and w_leftcol
+     * if lines don't wrap, and w_skipcol if lines wrap.
+     */
+    update_topline();
+    validate_cursor();
+
+#if 0
+    if (VIsual_active)
+	update_curbuf(INVERTED);/* update inverted part */
+    else if (must_redraw)
+	update_screen(0);
+    else if (redraw_cmdline || clear_cmdline)
+	showmode();
+#endif
+
+#if 0
+    if (VIsual_active)
+	update_curbuf(INVERTED);/* update inverted part */
+    else
+#endif
+	update_screen(CLEAR);
+
+    /* FIXME: it seems like it would be nicer if vim had some kind
+     * of mch_queue_maketitle() mechansim instead. A default
+     * implementation could just set need_maketitle = TRUE, and
+     * the clutter backend could queue and idle handler to update
+     * the title. */
+    if (need_maketitle)
+	maketitle();
 
     /* We simply want to issue a redraw of everything, and gui_redraw
      * handles clamping of the width and height arguments. */
@@ -495,6 +532,404 @@ resize_notify_cb (GObject *stage,
     fprintf (stderr, "resize_notify_cb w=%f, h=%f\n", width, height);
     gui_resize_shell (width, height);
     clutter_actor_queue_redraw (CLUTTER_ACTOR (stage));
+}
+
+    static int
+key_event_to_string (ClutterKeyEvent *key_event,
+		     char_u *string)
+{
+    int	len;
+    guint32 uc;
+
+    uc = key_event->unicode_value;
+    if (uc != 0)
+    {
+	/* Check for CTRL-foo */
+	if ((key_event->modifier_state & CLUTTER_CONTROL_MASK)
+	    && uc >= 0x20 && uc < 0x80)
+	{
+	    /* These mappings look arbitrary at the first glance, but in fact
+	     * resemble quite exactly the behaviour of the GTK+ 1.2 GUI on my
+	     * machine.  The only difference is BS vs. DEL for CTRL-8 (makes
+	     * more sense and is consistent with usual terminal behaviour). */
+	    if (uc >= '@')
+		string[0] = uc & 0x1F;
+	    else if (uc == '2')
+		string[0] = NUL;
+	    else if (uc >= '3' && uc <= '7')
+		string[0] = uc ^ 0x28;
+	    else if (uc == '8')
+		string[0] = BS;
+	    else if (uc == '?')
+		string[0] = DEL;
+	    else
+		string[0] = uc;
+	    len = 1;
+	}
+	else
+	{
+	    /* Translate a normal key to UTF-8.  This doesn't work for dead
+	     * keys of course, you _have_ to use an input method for that. */
+	    len = utf_char2bytes((int)uc, string);
+	}
+    }
+    else
+    {
+	/* Translate keys which are represented by ASCII control codes in Vim.
+	 * There are only a few of those; most control keys are translated to
+	 * special terminal-like control sequences. */
+	len = 1;
+	switch (key_event->keyval)
+	{
+	    case CLUTTER_KEY_Tab: case CLUTTER_KEY_KP_Tab:
+	    case CLUTTER_KEY_ISO_Left_Tab:
+		string[0] = TAB;
+		break;
+	    case CLUTTER_KEY_Linefeed:
+		string[0] = NL;
+		break;
+	    case CLUTTER_KEY_Return: case CLUTTER_KEY_ISO_Enter:
+	    case CLUTTER_KEY_3270_Enter:
+		string[0] = CAR;
+		break;
+	    case CLUTTER_KEY_Escape:
+		string[0] = ESC;
+		break;
+	    default:
+		len = 0;
+		break;
+	}
+    }
+    string[len] = NUL;
+
+    return len;
+}
+
+    static int
+modifiers_clutter2vim (ClutterModifierType modifier_state)
+{
+    int modifiers = 0;
+
+    if (modifier_state & CLUTTER_SHIFT_MASK)
+	modifiers |= MOD_MASK_SHIFT;
+    if (modifier_state & CLUTTER_CONTROL_MASK)
+	modifiers |= MOD_MASK_CTRL;
+    if (modifier_state & CLUTTER_MOD1_MASK)
+	modifiers |= MOD_MASK_ALT;
+    if (modifier_state & CLUTTER_MOD4_MASK)
+	modifiers |= MOD_MASK_META;
+
+    return modifiers;
+}
+
+/*
+ * Keycodes recognized by vim.
+ * NOTE: when changing this, the table in gui_x11.c probably needs the same
+ * change!
+ */
+static struct special_key
+{
+    guint key_sym;
+    char_u code0;
+    char_u code1;
+}
+const special_keys[] =
+{
+    {CLUTTER_KEY_Up,		'k', 'u'},
+    {CLUTTER_KEY_Down,		'k', 'd'},
+    {CLUTTER_KEY_Left,		'k', 'l'},
+    {CLUTTER_KEY_Right,		'k', 'r'},
+    {CLUTTER_KEY_F1,		'k', '1'},
+    {CLUTTER_KEY_F2,		'k', '2'},
+    {CLUTTER_KEY_F3,		'k', '3'},
+    {CLUTTER_KEY_F4,		'k', '4'},
+    {CLUTTER_KEY_F5,		'k', '5'},
+    {CLUTTER_KEY_F6,		'k', '6'},
+    {CLUTTER_KEY_F7,		'k', '7'},
+    {CLUTTER_KEY_F8,		'k', '8'},
+    {CLUTTER_KEY_F9,		'k', '9'},
+    {CLUTTER_KEY_F10,		'k', ';'},
+    {CLUTTER_KEY_F11,		'F', '1'},
+    {CLUTTER_KEY_F12,		'F', '2'},
+    {CLUTTER_KEY_F13,		'F', '3'},
+    {CLUTTER_KEY_F14,		'F', '4'},
+    {CLUTTER_KEY_F15,		'F', '5'},
+    {CLUTTER_KEY_F16,		'F', '6'},
+    {CLUTTER_KEY_F17,		'F', '7'},
+    {CLUTTER_KEY_F18,		'F', '8'},
+    {CLUTTER_KEY_F19,		'F', '9'},
+    {CLUTTER_KEY_F20,		'F', 'A'},
+    {CLUTTER_KEY_F21,		'F', 'B'},
+    {CLUTTER_KEY_Pause,		'F', 'B'}, /* Pause == F21 according to netbeans.txt */
+    {CLUTTER_KEY_F22,		'F', 'C'},
+    {CLUTTER_KEY_F23,		'F', 'D'},
+    {CLUTTER_KEY_F24,		'F', 'E'},
+    {CLUTTER_KEY_F25,		'F', 'F'},
+    {CLUTTER_KEY_F26,		'F', 'G'},
+    {CLUTTER_KEY_F27,		'F', 'H'},
+    {CLUTTER_KEY_F28,		'F', 'I'},
+    {CLUTTER_KEY_F29,		'F', 'J'},
+    {CLUTTER_KEY_F30,		'F', 'K'},
+    {CLUTTER_KEY_F31,		'F', 'L'},
+    {CLUTTER_KEY_F32,		'F', 'M'},
+    {CLUTTER_KEY_F33,		'F', 'N'},
+    {CLUTTER_KEY_F34,		'F', 'O'},
+    {CLUTTER_KEY_F35,		'F', 'P'},
+#ifdef SunXK_F36
+    {SunXK_F36,		'F', 'Q'},
+    {SunXK_F37,		'F', 'R'},
+#endif
+    {CLUTTER_KEY_Help,		'%', '1'},
+    {CLUTTER_KEY_Undo,		'&', '8'},
+    {CLUTTER_KEY_BackSpace,	'k', 'b'},
+    {CLUTTER_KEY_Insert,	'k', 'I'},
+    {CLUTTER_KEY_Delete,	'k', 'D'},
+    {CLUTTER_KEY_3270_BackTab,	'k', 'B'},
+    {CLUTTER_KEY_Clear,		'k', 'C'},
+    {CLUTTER_KEY_Home,		'k', 'h'},
+    {CLUTTER_KEY_End,		'@', '7'},
+    {CLUTTER_KEY_Prior,		'k', 'P'},
+    {CLUTTER_KEY_Next,		'k', 'N'},
+    {CLUTTER_KEY_Print,		'%', '9'},
+    /* Keypad keys: */
+    {CLUTTER_KEY_KP_Left,	'k', 'l'},
+    {CLUTTER_KEY_KP_Right,	'k', 'r'},
+    {CLUTTER_KEY_KP_Up,		'k', 'u'},
+    {CLUTTER_KEY_KP_Down,	'k', 'd'},
+    {CLUTTER_KEY_KP_Insert,	KS_EXTRA, (char_u)KE_KINS},
+    {CLUTTER_KEY_KP_Delete,	KS_EXTRA, (char_u)KE_KDEL},
+    {CLUTTER_KEY_KP_Home,	'K', '1'},
+    {CLUTTER_KEY_KP_End,	'K', '4'},
+    {CLUTTER_KEY_KP_Prior,	'K', '3'},  /* page up */
+    {CLUTTER_KEY_KP_Next,	'K', '5'},  /* page down */
+
+    {CLUTTER_KEY_KP_Add,	'K', '6'},
+    {CLUTTER_KEY_KP_Subtract,	'K', '7'},
+    {CLUTTER_KEY_KP_Divide,	'K', '8'},
+    {CLUTTER_KEY_KP_Multiply,	'K', '9'},
+    {CLUTTER_KEY_KP_Enter,	'K', 'A'},
+    {CLUTTER_KEY_KP_Decimal,	'K', 'B'},
+
+    {CLUTTER_KEY_KP_0,		'K', 'C'},
+    {CLUTTER_KEY_KP_1,		'K', 'D'},
+    {CLUTTER_KEY_KP_2,		'K', 'E'},
+    {CLUTTER_KEY_KP_3,		'K', 'F'},
+    {CLUTTER_KEY_KP_4,		'K', 'G'},
+    {CLUTTER_KEY_KP_5,		'K', 'H'},
+    {CLUTTER_KEY_KP_6,		'K', 'I'},
+    {CLUTTER_KEY_KP_7,		'K', 'J'},
+    {CLUTTER_KEY_KP_8,		'K', 'K'},
+    {CLUTTER_KEY_KP_9,		'K', 'L'},
+
+    /* End of list marker: */
+    {0, 0, 0}
+};
+
+    static gboolean
+handle_input_idle_cb (void *user_data)
+{
+    unsigned int *id = user_data;
+
+    /* XXX: this is a bit hacky! */
+    static oparg_T oa; /* operator arguments */
+    static gboolean oa_initialized = FALSE;
+
+    if (!oa_initialized)
+	clear_oparg (&oa);
+
+    normal_cmd (&oa, TRUE);
+
+    *id = 0;
+    return FALSE;
+}
+
+    static void
+queue_input_handling (void)
+{
+    static unsigned int id = 0;
+    if (id == 0)
+	g_idle_add (handle_input_idle_cb, &id);
+}
+
+    static gboolean
+key_press_event_cb (ClutterActor *stage,
+		    ClutterKeyEvent *key_event,
+		    void *data)
+{
+    /* The largest string we may get is, up to 6 bytes + NUL + CSI
+     * escapes + safety measure. */
+    char_u string[32], string2[32];
+    unsigned int key_sym = key_event->keyval;
+    unsigned long state = key_event->modifier_state;
+    int len;
+    int i;
+    char_u *s, *d;
+
+    clutter_actor_queue_redraw (clutter_stage_get_default ());
+
+    len = key_event_to_string(key_event, string2);
+
+    /* Careful: convert_input() doesn't handle the NUL character.
+     * No need to convert pure ASCII anyway, thus the len > 1 check. */
+    if (len > 1 && input_conv.vc_type != CONV_NONE)
+	len = convert_input(string2, len, sizeof(string2));
+
+    s = string2;
+
+    d = string;
+    for (i = 0; i < len; ++i)
+    {
+	*d++ = s[i];
+	if (d[-1] == CSI && d + 2 < string + sizeof(string))
+	{
+	    /* Turn CSI into K_CSI. */
+	    *d++ = KS_EXTRA;
+	    *d++ = (int)KE_CSI;
+	}
+    }
+    len = d - string;
+
+    /* Shift-Tab results in Left_Tab, but we want <S-Tab> */
+    if (key_sym == CLUTTER_KEY_ISO_Left_Tab)
+    {
+	key_sym = CLUTTER_KEY_Tab;
+	state |= CLUTTER_SHIFT_MASK;
+    }
+
+    /* Check for Alt/Meta key (Mod1Mask), but not for a BS, DEL or character
+     * that already has the 8th bit set.
+     * Don't do this for <S-M-Tab>, that should become K_S_TAB with ALT.
+     * Don't do this for double-byte encodings, it turns the char into a lead
+     * byte. */
+    if (len == 1
+	    && (state & CLUTTER_MOD1_MASK)
+	    && !(key_sym == CLUTTER_KEY_BackSpace ||
+		 key_sym == CLUTTER_KEY_Delete)
+	    && (string[0] & 0x80) == 0
+	    && !(key_sym == CLUTTER_KEY_Tab && (state & CLUTTER_SHIFT_MASK))
+#ifdef FEAT_MBYTE
+	    && !enc_dbcs
+#endif
+	    )
+    {
+	string[0] |= 0x80;
+	state &= ~CLUTTER_MOD1_MASK; /* don't use it again */
+
+	/* FIXME: 'tempted to simply assume FEAT_MBYTE + enc_utf8 */
+#ifdef FEAT_MBYTE
+	if (enc_utf8) /* convert to utf-8 */
+	{
+	    string[1] = string[0] & 0xbf;
+	    string[0] = ((unsigned)string[0] >> 6) + 0xc0;
+	    if (string[1] == CSI)
+	    {
+		string[2] = KS_EXTRA;
+		string[3] = (int)KE_CSI;
+		len = 4;
+	    }
+	    else
+		len = 2;
+	}
+#endif
+    }
+
+    /* Check for special keys.	Also do this when len == 1 (key has an ASCII
+     * value) to detect backspace, delete and keypad keys. */
+    if (len == 0 || len == 1)
+    {
+	for (i = 0; special_keys[i].key_sym != 0; i++)
+	{
+	    if (special_keys[i].key_sym == key_sym)
+	    {
+		string[0] = CSI;
+		string[1] = special_keys[i].code0;
+		string[2] = special_keys[i].code1;
+		len = -3;
+		break;
+	    }
+	}
+    }
+
+    if (len == 0)   /* Unrecognized key */
+	return TRUE;
+
+    /* Special keys (and a few others) may have modifiers. Also when using a
+     * double-byte encoding (can't set the 8th bit). */
+    if (len == -3 || key_sym == CLUTTER_KEY_space || key_sym == CLUTTER_KEY_Tab
+	    || key_sym == CLUTTER_KEY_Return || key_sym == CLUTTER_KEY_Linefeed
+	    || key_sym == CLUTTER_KEY_Escape || key_sym == CLUTTER_KEY_KP_Tab
+	    || key_sym == CLUTTER_KEY_ISO_Enter || key_sym == CLUTTER_KEY_3270_Enter
+#ifdef FEAT_MBYTE
+	    || (enc_dbcs && len == 1 && (state & CLUTTER_MOD1_MASK))
+#endif
+	    )
+    {
+	int modifiers = modifiers_clutter2vim(state);
+	int key;
+
+	/*
+	 * For some keys a shift modifier is translated into another key
+	 * code.
+	 */
+	if (len == -3)
+	    key = TO_SPECIAL(string[1], string[2]);
+	else
+	    key = string[0];
+
+	key = simplify_key(key, &modifiers);
+	if (key == CSI)
+	    key = K_CSI;
+	if (IS_SPECIAL(key))
+	{
+	    string[0] = CSI;
+	    string[1] = K_SECOND(key);
+	    string[2] = K_THIRD(key);
+	    len = 3;
+	}
+	else
+	{
+	    string[0] = key;
+	    len = 1;
+	}
+
+	if (modifiers != 0)
+	{
+	    string2[0] = CSI;
+	    string2[1] = KS_MODIFIER;
+	    string2[2] = modifiers;
+	    add_to_input_buf(string2, 3);
+	}
+    }
+
+    if (len == 1 && ((string[0] == Ctrl_C && ctrl_c_interrupts)
+		   || (string[0] == intr_char && intr_char != Ctrl_C)))
+    {
+	trash_input_buf();
+	got_int = TRUE;
+    }
+
+    add_to_input_buf(string, len);
+
+    /* blank out the pointer if necessary */
+    if (p_mh)
+	gui_mch_mousehide(TRUE);
+
+    /* The clutter mainloop can either be run in main_loop() or in
+     * gui_mch_wait_for_chars. In the latter case clutter_main_level
+     * will be > 1 and we don't need to queue input handling since we
+     * actually are already doing input handling and we will
+     * immediately act on the input when the mainloop quits.
+     */
+    /* FIXME: we need to come up with a new way to handle
+     * gui_mch_wait_for_chars because nested mainloops wont be
+     * acceptable when we try and make a clutter-vim actor.
+     */
+    if (clutter_main_level () > 1)
+	clutter_main_quit ();
+    else
+	queue_input_handling ();
+
+    return TRUE;
 }
 
     int
@@ -522,6 +957,8 @@ gui_mch_init (void)
 		      G_CALLBACK (resize_notify_cb), NULL);
     g_signal_connect (stage, "notify::height",
 		      G_CALLBACK (resize_notify_cb), NULL);
+    g_signal_connect_after (stage, "key-press-event",
+			    G_CALLBACK (key_press_event_cb), NULL);
 
     clutter_stage_set_user_resizable (CLUTTER_STAGE (stage), TRUE);
     /* 
@@ -830,7 +1267,12 @@ gui_mch_set_fg_color (guicolor_T color)
     void
 gui_mch_set_font (GuiFont font)
 {
+#if 0
+    /* this is what gui_gtk_x11.c does but it looks like gtk2 ignores
+     * this anyway. */
+    gui.current_font = font;
     fprintf (stderr, "gui_mch_set_font FIXME\n");
+#endif
 }
 
     void
@@ -868,6 +1310,20 @@ gui_mch_set_shellsize (int width, int height, int min_width, int min_height, int
 {
     fprintf (stderr, "gui_mch_set_shellsize FIXME\n");
 }
+
+#if defined(FEAT_TITLE) || defined(PROTO)
+    void
+gui_mch_settitle (char_u *title, char_u *icon UNUSED)
+{
+    if (title != NULL && output_conv.vc_type != CONV_NONE)
+	title = string_convert(&output_conv, title, NULL);
+
+    clutter_stage_set_title (CLUTTER_STAGE (gui.stage), (const char *)title);
+
+    if (output_conv.vc_type != CONV_NONE)
+	vim_free(title);
+}
+#endif /* FEAT_TITLE */
 
     void
 gui_mch_set_sp_color (guicolor_T color)
@@ -923,10 +1379,90 @@ gui_mch_update (void)
     fprintf (stderr, "gui_mch_update FIXME\n");
 }
 
+    static gint
+input_timer_cb(gpointer data)
+{
+    int *timed_out = (int *) data;
+
+    /* Just inform the caller about the occurrence of it */
+    *timed_out = TRUE;
+
+    clutter_main_quit();
+
+    return FALSE;		/* don't happen again */
+}
+
+/*
+ * GUI input routine called by gui_wait_for_chars().  Waits for a character
+ * from the keyboard.
+ *  wtime == -1     Wait forever.
+ *  wtime == 0	    This should never happen.
+ *  wtime > 0	    Wait wtime milliseconds for a character.
+ * Returns OK if a character was found to be available within the given time,
+ * or FAIL otherwise.
+ */
     int
 gui_mch_wait_for_chars (long wtime)
 {
-    fprintf (stderr, "gui_mch_wait_for_chars FIXME\n");
-    return OK;
+    int focus;
+    guint timer;
+    static int timed_out;
+
+    fprintf (stderr, "gui_mch_wait_for_chars\n");
+
+    timed_out = FALSE;
+
+    /* this timeout makes sure that we will return if no characters arrived in
+     * time */
+
+    if (wtime > 0)
+	timer = g_timeout_add((guint32)wtime, input_timer_cb, &timed_out);
+    else
+	timer = 0;
+
+    focus = gui.in_focus;
+
+    do
+    {
+	/* Stop or start blinking when focus changes */
+	if (gui.in_focus != focus)
+	{
+	    if (gui.in_focus)
+		gui_mch_start_blink();
+	    else
+		gui_mch_stop_blink();
+	    focus = gui.in_focus;
+	}
+
+#if defined(FEAT_NETBEANS_INTG)
+	/* Process the queued netbeans messages. */
+	netbeans_parse_messages();
+#endif
+
+	/*
+	 * Loop in GTK+ processing  until a timeout or input occurs.
+	 * Skip this if input is available anyway (can happen in rare
+	 * situations, sort of race condition).
+	 */
+	if (!input_available())
+	    clutter_main();
+
+	/* Got char, return immediately */
+	if (input_available())
+	{
+	    if (timer != 0 && !timed_out)
+		g_source_remove (timer);
+	    return OK;
+	}
+    } while (wtime < 0 || !timed_out);
+
+#if 0
+    /*
+     * Flush all eventually pending (drawing) events.
+     */
+    gui_mch_update();
+#endif
+
+    return FAIL;
 }
 

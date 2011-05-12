@@ -1023,6 +1023,10 @@ main_loop(cmdwin, noexmode)
     }
 #endif
 
+    clear_oparg(&oa);
+
+#ifdef FEAT_GUI_CLUTTER
+
     if (!cmdwin && !noexmode)
     {
 	static GSourceFuncs source_funcs =
@@ -1040,7 +1044,8 @@ main_loop(cmdwin, noexmode)
 	clutter_main ();
     }
 
-    clear_oparg(&oa);
+#else
+
     while (!cmdwin
 #ifdef FEAT_CMDWIN
 	    || cmdwin_result == 0
@@ -1230,6 +1235,9 @@ main_loop(cmdwin, noexmode)
 	else
 	    normal_cmd(&oa, TRUE);
     }
+
+#endif /* FEAT_GUI_CLUTTER */
+
 }
 
 
