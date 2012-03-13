@@ -14,6 +14,8 @@
  *  Robert Bragg <robert@sixbynine.org>
  */
 
+#include <ucontext.h>
+
 #include <clutter/clutter.h>
 #include <clutter/x11/clutter-x11.h>
 #include <glib.h>
@@ -21,6 +23,17 @@
 #include "vim.h"
 
 #define DEFAULT_FONT	"Monospace 10"
+
+ucontext_t main_uctx;
+ucontext_t vim_uctx;
+ucontext_t gui_uctx;
+
+static gboolean in_gui_uctx = TRUE;
+
+typedef struct _DrawCommand
+{
+    PangoGlyphString *glyphs;
+} DrawCommand;
 
     void
 clip_mch_lose_selection (VimClipboard *cbd)
@@ -225,15 +238,18 @@ gui_clutter_draw_string (int row, int col, char_u *s, int len, int flags)
 	pango_shape((const char *)s + item->offset, item->length,
 		    &item->analysis, glyphs);
 
-	x = TEXT_X(col) * PANGO_SCALE;
-	y = TEXT_Y(row) * PANGO_SCALE;
-	renderer = cogl_pango_font_map_get_renderer (gui.font_map);
-	
-	cogl_set_source_color (&gui.fgcolor);
-	pango_renderer_draw_glyphs (renderer,
-				    item->analysis.font,
-				    glyphs,
-				    x, y);
+	if (in_gui_uctx)
+	{
+	    x = TEXT_X(col) * PANGO_SCALE;
+	    y = TEXT_Y(row) * PANGO_SCALE;
+	    renderer = cogl_pango_font_map_get_renderer (gui.font_map);
+
+	    cogl_set_source_color (&gui.fgcolor);
+	    pango_renderer_draw_glyphs (renderer,
+					item->analysis.font,
+					glyphs,
+					x, y);
+	}
 
 	pango_item_free(item);
 
@@ -242,7 +258,12 @@ gui_clutter_draw_string (int row, int col, char_u *s, int len, int flags)
 
     pango_attr_list_unref(attr_list);
 
+    pango_glyph_string_free(glyphs);
+
     vim_free(conv_buf);
+
+    if (!in_gui_uctx)
+	clutter_actor_queue_redraw (gui.stage);
 
     return column_offset;
 }
@@ -725,6 +746,7 @@ const special_keys[] =
     {0, 0, 0}
 };
 
+#if 0
     static gboolean
 handle_input_idle_cb (void *user_data)
 {
@@ -739,7 +761,9 @@ handle_input_idle_cb (void *user_data)
 
     normal_cmd (&oa, TRUE);
 
+    g_source_remove (*id);
     *id = 0;
+
     return FALSE;
 }
 
@@ -748,7 +772,23 @@ queue_input_handling (void)
 {
     static unsigned int id = 0;
     if (id == 0)
-	g_idle_add (handle_input_idle_cb, &id);
+	id = g_idle_add (handle_input_idle_cb, &id);
+}
+#endif
+
+    static gboolean
+switch_to_vim_context_cb (void *user_data)
+{
+    g_return_val_if_fail (in_gui_uctx == TRUE, FALSE);
+
+    in_gui_uctx = FALSE;
+    if (swapcontext(&gui_uctx, &vim_uctx) == -1)
+    {
+	mch_errmsg(_("Failed to swap from gui to vim context"));
+	mch_errmsg("\n");
+	mch_exit(1);
+    }
+    in_gui_uctx = TRUE;
 }
 
     static gboolean
@@ -914,6 +954,9 @@ key_press_event_cb (ClutterActor *stage,
     if (p_mh)
 	gui_mch_mousehide(TRUE);
 
+    g_idle_add (switch_to_vim_context_cb, NULL);
+
+#if 0
     /* The clutter mainloop can either be run in main_loop() or in
      * gui_mch_wait_for_chars. In the latter case clutter_main_level
      * will be > 1 and we don't need to queue input handling since we
@@ -928,6 +971,7 @@ key_press_event_cb (ClutterActor *stage,
 	clutter_main_quit ();
     else
 	queue_input_handling ();
+#endif
 
     return TRUE;
 }
@@ -994,6 +1038,14 @@ gui_mch_init_check (void)
     }
 
     return OK;
+}
+
+    void
+gui_clutter_start_mainloop (void)
+{
+    g_idle_add (switch_to_vim_context_cb, NULL);
+
+    clutter_main ();
 }
 
 /*
@@ -1379,6 +1431,7 @@ gui_mch_update (void)
     fprintf (stderr, "gui_mch_update FIXME\n");
 }
 
+#if 0
     static gint
 input_timer_cb(gpointer data)
 {
@@ -1391,6 +1444,7 @@ input_timer_cb(gpointer data)
 
     return FALSE;		/* don't happen again */
 }
+#endif
 
 /*
  * GUI input routine called by gui_wait_for_chars().  Waits for a character
@@ -1416,7 +1470,8 @@ gui_mch_wait_for_chars (long wtime)
      * time */
 
     if (wtime > 0)
-	timer = g_timeout_add((guint32)wtime, input_timer_cb, &timed_out);
+	timer = g_timeout_add((guint32)wtime,
+		switch_to_vim_context_cb, &timed_out);
     else
 	timer = 0;
 
@@ -1424,6 +1479,8 @@ gui_mch_wait_for_chars (long wtime)
 
     do
     {
+	static gboolean in_vim_uctx = TRUE;
+
 	/* Stop or start blinking when focus changes */
 	if (gui.in_focus != focus)
 	{
@@ -1439,6 +1496,18 @@ gui_mch_wait_for_chars (long wtime)
 	netbeans_parse_messages();
 #endif
 
+	g_return_val_if_fail (in_gui_uctx == FALSE, FALSE);
+
+	in_gui_uctx = TRUE;
+	if (swapcontext(&vim_uctx, &gui_uctx) == -1)
+	{
+	    mch_errmsg(_("Failed to swap from vim to gui context"));
+	    mch_errmsg("\n");
+	    mch_exit(1);
+	}
+	in_vim_uctx = FALSE;
+
+#if 0
 	/*
 	 * Loop in GTK+ processing  until a timeout or input occurs.
 	 * Skip this if input is available anyway (can happen in rare
@@ -1446,6 +1515,7 @@ gui_mch_wait_for_chars (long wtime)
 	 */
 	if (!input_available())
 	    clutter_main();
+#endif
 
 	/* Got char, return immediately */
 	if (input_available())

@@ -27,8 +27,10 @@
 # include <limits.h>
 #endif
 
-/* FIXME: guard me! */
+#if defined (FEAT_GUI_CLUTTER)
 #include <glib.h>
+#include "gui_clutter.h"
+#endif
 
 /* Maximum number of commands from + or -c arguments. */
 #define MAX_ARG_CMDS 10
@@ -91,6 +93,9 @@ typedef struct
     int		diff_mode;		/* start with 'diff' set */
 #endif
 } mparm_T;
+
+static mparm_T params;			/* various parameters passed between
+					 * main() and other functions. */
 
 /* Values for edit_type. */
 #define EDIT_NONE   0	    /* no edit type yet */
@@ -156,6 +161,335 @@ static char *(main_errors[]) =
 #define ME_INVALID_ARG		5
 };
 
+static void
+prepare_and_run_main_loop (void)
+{
+#ifdef FEAT_GUI
+    if (gui.starting)
+    {
+#if defined(UNIX) || defined(VMS)
+	/* When something caused a message from a vimrc script, need to output
+	 * an extra newline before the shell prompt. */
+	if (did_emsg || msg_didout)
+	    putchar('\n');
+#endif
+
+	gui_start();		/* will set full_screen to TRUE */
+	TIME_MSG("starting GUI");
+
+	/* When running "evim" or "gvim -y" we need the menus, exit if we
+	 * don't have them. */
+	if (!gui.in_use && params.evim_mode)
+	    mch_exit(1);
+    }
+#endif
+
+#ifdef SPAWNO		/* special MSDOS swapping library */
+    init_SPAWNO("", SWAP_ANY);
+#endif
+
+#ifdef FEAT_VIMINFO
+    /*
+     * Read in registers, history etc, but not marks, from the viminfo file.
+     * This is where v:oldfiles gets filled.
+     */
+    if (*p_viminfo != NUL)
+    {
+	read_viminfo(NULL, VIF_WANT_INFO | VIF_GET_OLDFILES);
+	TIME_MSG("reading viminfo");
+    }
+#endif
+
+#ifdef FEAT_QUICKFIX
+    /*
+     * "-q errorfile": Load the error file now.
+     * If the error file can't be read, exit before doing anything else.
+     */
+    if (params.edit_type == EDIT_QF)
+    {
+	if (params.use_ef != NULL)
+	    set_string_option_direct((char_u *)"ef", -1,
+					   params.use_ef, OPT_FREE, SID_CARG);
+	if (qf_init(NULL, p_ef, p_efm, TRUE) < 0)
+	{
+	    out_char('\n');
+	    mch_exit(3);
+	}
+	TIME_MSG("reading errorfile");
+    }
+#endif
+
+    /*
+     * Start putting things on the screen.
+     * Scroll screen down before drawing over it
+     * Clear screen now, so file message will not be cleared.
+     */
+    starting = NO_BUFFERS;
+    no_wait_return = FALSE;
+    if (!exmode_active)
+	msg_scroll = FALSE;
+
+#ifdef FEAT_GUI
+    /*
+     * This seems to be required to make callbacks to be called now, instead
+     * of after things have been put on the screen, which then may be deleted
+     * when getting a resize callback.
+     * For the Mac this handles putting files dropped on the Vim icon to
+     * global_alist.
+     */
+    if (gui.in_use)
+    {
+# ifdef FEAT_SUN_WORKSHOP
+	if (!usingSunWorkShop)
+# endif
+	    gui_wait_for_chars(50L);
+	TIME_MSG("GUI delay");
+    }
+#endif
+
+#if defined(FEAT_GUI_PHOTON) && defined(FEAT_CLIPBOARD)
+    qnx_clip_init();
+#endif
+
+#ifdef FEAT_XCLIPBOARD
+    /* Start using the X clipboard, unless the GUI was started. */
+# ifdef FEAT_GUI
+    if (!gui.in_use)
+# endif
+    {
+	setup_term_clip();
+	TIME_MSG("setup clipboard");
+    }
+#endif
+
+#ifdef FEAT_CLIENTSERVER
+    /* Prepare for being a Vim server. */
+    prepare_server(&params);
+#endif
+
+    /*
+     * If "-" argument given: Read file from stdin.
+     * Do this before starting Raw mode, because it may change things that the
+     * writing end of the pipe doesn't like, e.g., in case stdin and stderr
+     * are the same terminal: "cat | vim -".
+     * Using autocommands here may cause trouble...
+     */
+    if (params.edit_type == EDIT_STDIN && !recoverymode)
+	read_stdin();
+
+#if defined(UNIX) || defined(VMS)
+    /* When switching screens and something caused a message from a vimrc
+     * script, need to output an extra newline on exit. */
+    if ((did_emsg || msg_didout) && *T_TI != NUL)
+	newline_on_exit = TRUE;
+#endif
+
+    /*
+     * When done something that is not allowed or error message call
+     * wait_return.  This must be done before starttermcap(), because it may
+     * switch to another screen. It must be done after settmode(TMODE_RAW),
+     * because we want to react on a single key stroke.
+     * Call settmode and starttermcap here, so the T_KS and T_TI may be
+     * defined by termcapinit and redefined in .exrc.
+     */
+    settmode(TMODE_RAW);
+    TIME_MSG("setting raw mode");
+
+    if (need_wait_return || msg_didany)
+    {
+	wait_return(TRUE);
+	TIME_MSG("waiting for return");
+    }
+
+    starttermcap();	    /* start termcap if not done by wait_return() */
+    TIME_MSG("start termcap");
+
+#ifdef FEAT_MOUSE
+    setmouse();				/* may start using the mouse */
+#endif
+    if (scroll_region)
+	scroll_region_reset();		/* In case Rows changed */
+    scroll_start();	/* may scroll the screen to the right position */
+
+    /*
+     * Don't clear the screen when starting in Ex mode, unless using the GUI.
+     */
+    if (exmode_active
+#ifdef FEAT_GUI
+			&& !gui.in_use
+#endif
+					)
+	must_redraw = CLEAR;
+    else
+    {
+	screenclear();			/* clear screen */
+	TIME_MSG("clearing screen");
+    }
+
+#ifdef FEAT_CRYPT
+    if (params.ask_for_key)
+    {
+	(void)get_crypt_key(TRUE, TRUE);
+	TIME_MSG("getting crypt key");
+    }
+#endif
+
+    no_wait_return = TRUE;
+
+    /*
+     * Create the requested number of windows and edit buffers in them.
+     * Also does recovery if "recoverymode" set.
+     */
+    create_windows(&params);
+    TIME_MSG("opening buffers");
+
+#ifdef FEAT_EVAL
+    /* clear v:swapcommand */
+    set_vim_var_string(VV_SWAPCOMMAND, NULL, -1);
+#endif
+
+    /* Ex starts at last line of the file */
+    if (exmode_active)
+	curwin->w_cursor.lnum = curbuf->b_ml.ml_line_count;
+
+#ifdef FEAT_AUTOCMD
+    apply_autocmds(EVENT_BUFENTER, NULL, NULL, FALSE, curbuf);
+    TIME_MSG("BufEnter autocommands");
+#endif
+    setpcmark();
+
+#ifdef FEAT_QUICKFIX
+    /*
+     * When started with "-q errorfile" jump to first error now.
+     */
+    if (params.edit_type == EDIT_QF)
+    {
+	qf_jump(NULL, 0, 0, FALSE);
+	TIME_MSG("jump to first error");
+    }
+#endif
+
+#ifdef FEAT_WINDOWS
+    /*
+     * If opened more than one window, start editing files in the other
+     * windows.
+     */
+    edit_buffers(&params);
+#endif
+
+#ifdef FEAT_DIFF
+    if (params.diff_mode)
+    {
+	win_T	*wp;
+
+	/* set options in each window for "vimdiff". */
+	for (wp = firstwin; wp != NULL; wp = wp->w_next)
+	    diff_win_options(wp, TRUE);
+    }
+#endif
+
+    /*
+     * Shorten any of the filenames, but only when absolute.
+     */
+    shorten_fnames(FALSE);
+
+    /*
+     * Need to jump to the tag before executing the '-c command'.
+     * Makes "vim -c '/return' -t main" work.
+     */
+    if (params.tagname != NULL)
+    {
+#if defined(HAS_SWAP_EXISTS_ACTION)
+	swap_exists_did_quit = FALSE;
+#endif
+
+	vim_snprintf((char *)IObuff, IOSIZE, "ta %s", params.tagname);
+	do_cmdline_cmd(IObuff);
+	TIME_MSG("jumping to tag");
+
+#if defined(HAS_SWAP_EXISTS_ACTION)
+	/* If the user doesn't want to edit the file then we quit here. */
+	if (swap_exists_did_quit)
+	    getout(1);
+#endif
+    }
+
+    /* Execute any "+", "-c" and "-S" arguments. */
+    if (params.n_commands > 0)
+	exe_commands(&params);
+
+    RedrawingDisabled = 0;
+    redraw_all_later(NOT_VALID);
+    no_wait_return = FALSE;
+    starting = 0;
+
+#ifdef FEAT_TERMRESPONSE
+    /* Requesting the termresponse is postponed until here, so that a "-c q"
+     * argument doesn't make it appear in the shell Vim was started from. */
+    may_req_termresponse();
+#endif
+
+    /* start in insert mode */
+    if (p_im)
+	need_start_insertmode = TRUE;
+
+#ifdef FEAT_AUTOCMD
+    apply_autocmds(EVENT_VIMENTER, NULL, NULL, FALSE, curbuf);
+    TIME_MSG("VimEnter autocommands");
+#endif
+
+#if defined(FEAT_DIFF) && defined(FEAT_SCROLLBIND)
+    /* When a startup script or session file setup for diff'ing and
+     * scrollbind, sync the scrollbind now. */
+    if (curwin->w_p_diff && curwin->w_p_scb)
+    {
+	update_topline();
+	check_scrollbind((linenr_T)0, 0L);
+	TIME_MSG("diff scrollbinding");
+    }
+#endif
+
+#if defined(WIN3264) && !defined(FEAT_GUI_W32)
+    mch_set_winsize_now();	    /* Allow winsize changes from now on */
+#endif
+
+#if defined(FEAT_GUI) && defined(FEAT_WINDOWS)
+    /* When tab pages were created, may need to update the tab pages line and
+     * scrollbars.  This is skipped while creating them. */
+    if (first_tabpage->tp_next != NULL)
+    {
+	out_flush();
+	gui_init_which_components(NULL);
+	gui_update_scrollbars(TRUE);
+    }
+    need_mouse_correct = TRUE;
+#endif
+
+    /* If ":startinsert" command used, stuff a dummy command to be able to
+     * call normal_cmd(), which will then start Insert mode. */
+    if (restart_edit != 0)
+	stuffcharReadbuff(K_NOP);
+
+#ifdef FEAT_NETBEANS_INTG
+    if (usingNetbeans)
+	/* Tell the client that it can start sending commands. */
+	netbeans_startup_done();
+#endif
+
+    TIME_MSG("before starting main loop");
+
+    /*
+     * Call the main command loop.  This never returns.
+     * For embedded MzScheme the main_loop will be called by Scheme
+     * for proper stack tracking
+     */
+#ifndef FEAT_MZSCHEME
+    main_loop(FALSE, FALSE);
+#else
+    mzscheme_main();
+#endif
+}
+
 #ifndef PROTO	    /* don't want a prototype for main() */
     int
 # ifdef VIMDLL
@@ -174,8 +508,6 @@ main
     char	**argv;
 {
     char_u	*fname = NULL;		/* file name from command line */
-    mparm_T	params;			/* various parameters passed between
-					 * main() and other functions. */
 
     /*
      * Do any system-specific initialisations.  These can NOT use IObuff or
@@ -622,330 +954,42 @@ main
     }
 #endif
 
-#ifdef FEAT_GUI
+#if defined(FEAT_GUI_CLUTTER)
     if (gui.starting)
     {
-#if defined(UNIX) || defined(VMS)
-	/* When something caused a message from a vimrc script, need to output
-	 * an extra newline before the shell prompt. */
-	if (did_emsg || msg_didout)
-	    putchar('\n');
-#endif
+	size_t stack_size = 512 * 1024;
 
-    fprintf (stderr, "\n\nXXX main.c %d %d\n\n", gui.starting, gui.in_use);
-	gui_start();		/* will set full_screen to TRUE */
-	TIME_MSG("starting GUI");
-
-	/* When running "evim" or "gvim -y" we need the menus, exit if we
-	 * don't have them. */
-	if (!gui.in_use && params.evim_mode)
-	    mch_exit(1);
-    }
-#endif
-
-#ifdef SPAWNO		/* special MSDOS swapping library */
-    init_SPAWNO("", SWAP_ANY);
-#endif
-
-#ifdef FEAT_VIMINFO
-    /*
-     * Read in registers, history etc, but not marks, from the viminfo file.
-     * This is where v:oldfiles gets filled.
-     */
-    if (*p_viminfo != NUL)
-    {
-	read_viminfo(NULL, VIF_WANT_INFO | VIF_GET_OLDFILES);
-	TIME_MSG("reading viminfo");
-    }
-#endif
-
-#ifdef FEAT_QUICKFIX
-    /*
-     * "-q errorfile": Load the error file now.
-     * If the error file can't be read, exit before doing anything else.
-     */
-    if (params.edit_type == EDIT_QF)
-    {
-	if (params.use_ef != NULL)
-	    set_string_option_direct((char_u *)"ef", -1,
-					   params.use_ef, OPT_FREE, SID_CARG);
-	if (qf_init(NULL, p_ef, p_efm, TRUE) < 0)
+	if (getcontext(&gui_uctx) == -1)
 	{
-	    out_char('\n');
-	    mch_exit(3);
+	    mch_errmsg(_("Failed to get gui stack context"));
+	    mch_errmsg("\n");
+	    mch_exit(1);
 	}
-	TIME_MSG("reading errorfile");
+	gui_uctx.uc_stack.ss_sp = g_malloc (stack_size);
+	gui_uctx.uc_stack.ss_size = stack_size;
+	gui_uctx.uc_link = &main_uctx;
+	makecontext(&gui_uctx, gui_clutter_start_mainloop, 0);
+
+	if (getcontext(&vim_uctx) == -1)
+	{
+	    mch_errmsg(_("Failed to get vim stack context"));
+	    mch_errmsg("\n");
+	    mch_exit(1);
+	}
+	vim_uctx.uc_stack.ss_sp = g_malloc (stack_size);
+	vim_uctx.uc_stack.ss_size = stack_size;
+	vim_uctx.uc_link = &main_uctx;
+	makecontext(&vim_uctx, prepare_and_run_main_loop, 0);
+
+	if (swapcontext(&main_uctx, &gui_uctx) == -1)
+	{
+	    mch_errmsg(_("Failed to swap to gui context"));
+	    mch_errmsg("\n");
+	    mch_exit(1);
+	}
     }
-#endif
-
-    /*
-     * Start putting things on the screen.
-     * Scroll screen down before drawing over it
-     * Clear screen now, so file message will not be cleared.
-     */
-    starting = NO_BUFFERS;
-    no_wait_return = FALSE;
-    if (!exmode_active)
-	msg_scroll = FALSE;
-
-#ifdef FEAT_GUI
-    /*
-     * This seems to be required to make callbacks to be called now, instead
-     * of after things have been put on the screen, which then may be deleted
-     * when getting a resize callback.
-     * For the Mac this handles putting files dropped on the Vim icon to
-     * global_alist.
-     */
-    if (gui.in_use)
-    {
-# ifdef FEAT_SUN_WORKSHOP
-	if (!usingSunWorkShop)
-# endif
-	    gui_wait_for_chars(50L);
-	TIME_MSG("GUI delay");
-    }
-#endif
-
-#if defined(FEAT_GUI_PHOTON) && defined(FEAT_CLIPBOARD)
-    qnx_clip_init();
-#endif
-
-#ifdef FEAT_XCLIPBOARD
-    /* Start using the X clipboard, unless the GUI was started. */
-# ifdef FEAT_GUI
-    if (!gui.in_use)
-# endif
-    {
-	setup_term_clip();
-	TIME_MSG("setup clipboard");
-    }
-#endif
-
-#ifdef FEAT_CLIENTSERVER
-    /* Prepare for being a Vim server. */
-    prepare_server(&params);
-#endif
-
-    /*
-     * If "-" argument given: Read file from stdin.
-     * Do this before starting Raw mode, because it may change things that the
-     * writing end of the pipe doesn't like, e.g., in case stdin and stderr
-     * are the same terminal: "cat | vim -".
-     * Using autocommands here may cause trouble...
-     */
-    if (params.edit_type == EDIT_STDIN && !recoverymode)
-	read_stdin();
-
-#if defined(UNIX) || defined(VMS)
-    /* When switching screens and something caused a message from a vimrc
-     * script, need to output an extra newline on exit. */
-    if ((did_emsg || msg_didout) && *T_TI != NUL)
-	newline_on_exit = TRUE;
-#endif
-
-    /*
-     * When done something that is not allowed or error message call
-     * wait_return.  This must be done before starttermcap(), because it may
-     * switch to another screen. It must be done after settmode(TMODE_RAW),
-     * because we want to react on a single key stroke.
-     * Call settmode and starttermcap here, so the T_KS and T_TI may be
-     * defined by termcapinit and redefined in .exrc.
-     */
-    settmode(TMODE_RAW);
-    TIME_MSG("setting raw mode");
-
-    if (need_wait_return || msg_didany)
-    {
-	wait_return(TRUE);
-	TIME_MSG("waiting for return");
-    }
-
-    starttermcap();	    /* start termcap if not done by wait_return() */
-    TIME_MSG("start termcap");
-
-#ifdef FEAT_MOUSE
-    setmouse();				/* may start using the mouse */
-#endif
-    if (scroll_region)
-	scroll_region_reset();		/* In case Rows changed */
-    scroll_start();	/* may scroll the screen to the right position */
-
-    /*
-     * Don't clear the screen when starting in Ex mode, unless using the GUI.
-     */
-    if (exmode_active
-#ifdef FEAT_GUI
-			&& !gui.in_use
-#endif
-					)
-	must_redraw = CLEAR;
-    else
-    {
-	screenclear();			/* clear screen */
-	TIME_MSG("clearing screen");
-    }
-
-#ifdef FEAT_CRYPT
-    if (params.ask_for_key)
-    {
-	(void)get_crypt_key(TRUE, TRUE);
-	TIME_MSG("getting crypt key");
-    }
-#endif
-
-    no_wait_return = TRUE;
-
-    /*
-     * Create the requested number of windows and edit buffers in them.
-     * Also does recovery if "recoverymode" set.
-     */
-    create_windows(&params);
-    TIME_MSG("opening buffers");
-
-#ifdef FEAT_EVAL
-    /* clear v:swapcommand */
-    set_vim_var_string(VV_SWAPCOMMAND, NULL, -1);
-#endif
-
-    /* Ex starts at last line of the file */
-    if (exmode_active)
-	curwin->w_cursor.lnum = curbuf->b_ml.ml_line_count;
-
-#ifdef FEAT_AUTOCMD
-    apply_autocmds(EVENT_BUFENTER, NULL, NULL, FALSE, curbuf);
-    TIME_MSG("BufEnter autocommands");
-#endif
-    setpcmark();
-
-#ifdef FEAT_QUICKFIX
-    /*
-     * When started with "-q errorfile" jump to first error now.
-     */
-    if (params.edit_type == EDIT_QF)
-    {
-	qf_jump(NULL, 0, 0, FALSE);
-	TIME_MSG("jump to first error");
-    }
-#endif
-
-#ifdef FEAT_WINDOWS
-    /*
-     * If opened more than one window, start editing files in the other
-     * windows.
-     */
-    edit_buffers(&params);
-#endif
-
-#ifdef FEAT_DIFF
-    if (params.diff_mode)
-    {
-	win_T	*wp;
-
-	/* set options in each window for "vimdiff". */
-	for (wp = firstwin; wp != NULL; wp = wp->w_next)
-	    diff_win_options(wp, TRUE);
-    }
-#endif
-
-    /*
-     * Shorten any of the filenames, but only when absolute.
-     */
-    shorten_fnames(FALSE);
-
-    /*
-     * Need to jump to the tag before executing the '-c command'.
-     * Makes "vim -c '/return' -t main" work.
-     */
-    if (params.tagname != NULL)
-    {
-#if defined(HAS_SWAP_EXISTS_ACTION)
-	swap_exists_did_quit = FALSE;
-#endif
-
-	vim_snprintf((char *)IObuff, IOSIZE, "ta %s", params.tagname);
-	do_cmdline_cmd(IObuff);
-	TIME_MSG("jumping to tag");
-
-#if defined(HAS_SWAP_EXISTS_ACTION)
-	/* If the user doesn't want to edit the file then we quit here. */
-	if (swap_exists_did_quit)
-	    getout(1);
-#endif
-    }
-
-    /* Execute any "+", "-c" and "-S" arguments. */
-    if (params.n_commands > 0)
-	exe_commands(&params);
-
-    RedrawingDisabled = 0;
-    redraw_all_later(NOT_VALID);
-    no_wait_return = FALSE;
-    starting = 0;
-
-#ifdef FEAT_TERMRESPONSE
-    /* Requesting the termresponse is postponed until here, so that a "-c q"
-     * argument doesn't make it appear in the shell Vim was started from. */
-    may_req_termresponse();
-#endif
-
-    /* start in insert mode */
-    if (p_im)
-	need_start_insertmode = TRUE;
-
-#ifdef FEAT_AUTOCMD
-    apply_autocmds(EVENT_VIMENTER, NULL, NULL, FALSE, curbuf);
-    TIME_MSG("VimEnter autocommands");
-#endif
-
-#if defined(FEAT_DIFF) && defined(FEAT_SCROLLBIND)
-    /* When a startup script or session file setup for diff'ing and
-     * scrollbind, sync the scrollbind now. */
-    if (curwin->w_p_diff && curwin->w_p_scb)
-    {
-	update_topline();
-	check_scrollbind((linenr_T)0, 0L);
-	TIME_MSG("diff scrollbinding");
-    }
-#endif
-
-#if defined(WIN3264) && !defined(FEAT_GUI_W32)
-    mch_set_winsize_now();	    /* Allow winsize changes from now on */
-#endif
-
-#if defined(FEAT_GUI) && defined(FEAT_WINDOWS)
-    /* When tab pages were created, may need to update the tab pages line and
-     * scrollbars.  This is skipped while creating them. */
-    if (first_tabpage->tp_next != NULL)
-    {
-	out_flush();
-	gui_init_which_components(NULL);
-	gui_update_scrollbars(TRUE);
-    }
-    need_mouse_correct = TRUE;
-#endif
-
-    /* If ":startinsert" command used, stuff a dummy command to be able to
-     * call normal_cmd(), which will then start Insert mode. */
-    if (restart_edit != 0)
-	stuffcharReadbuff(K_NOP);
-
-#ifdef FEAT_NETBEANS_INTG
-    if (usingNetbeans)
-	/* Tell the client that it can start sending commands. */
-	netbeans_startup_done();
-#endif
-
-    TIME_MSG("before starting main loop");
-
-    /*
-     * Call the main command loop.  This never returns.
-     * For embedded MzScheme the main_loop will be called by Scheme
-     * for proper stack tracking
-     */
-#ifndef FEAT_MZSCHEME
-    main_loop(FALSE, FALSE);
 #else
-    mzscheme_main();
+    prepare_and_run_main_loop ();
 #endif
 
     return 0;
@@ -1025,7 +1069,7 @@ main_loop(cmdwin, noexmode)
 
     clear_oparg(&oa);
 
-#ifdef FEAT_GUI_CLUTTER
+#if 0 //def FEAT_GUI_CLUTTER
 
     if (!cmdwin && !noexmode)
     {
